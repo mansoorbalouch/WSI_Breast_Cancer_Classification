@@ -7,6 +7,7 @@ from torch.optim import lr_scheduler
 from torchvision import transforms, datasets, models
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 import time
 import copy
 
@@ -19,7 +20,7 @@ class BinClassifierTrainer:
         self.base_dir = f"{main_dir}/Tiles_Data"
         self.source_dir = f"{main_dir}/Tiles_Data"
         self.model_path = "Model_Weights"
-        self.model_name = "ResNet18"
+        self.model_name = "ResNet50"
         self.data_transforms = {
             'train': transforms.Compose([
                 transforms.RandomResizedCrop(224),
@@ -68,7 +69,7 @@ class BinClassifierTrainer:
         return dataloaders, dataset_sizes, class_names
 
     def initialize_model(self):
-        model = models.resnet18(pretrained=True)
+        model = models.resnet50(pretrained=True)
         num_ftrs = model.fc.in_features
         model.fc = nn.Linear(num_ftrs, 2)
         model = model.to(self.device)
@@ -156,9 +157,54 @@ class BinClassifierTrainer:
 
         trained_model = self.train_model(model, criterion, optimizer, scheduler, dataloaders, dataset_sizes)
         return trained_model
+    
+    def load_and_evaluate_model(self, model_path, phase='val'):
+        """Load the saved model and evaluate it on the test set."""
+        model = models.resnet18(pretrained=False)  # Initialize the model structure
+        num_ftrs = model.fc.in_features
+        model.fc = nn.Linear(num_ftrs, 2)  # Adjust according to your setup
+        model.load_state_dict(torch.load(model_path, map_location=self.device))
+        model = model.to(self.device)
+        model.eval()  # Set the model to evaluation mode
+        
+        dataloaders, dataset_sizes, _ = self.load_data()
+
+        true_labels = []
+        predictions = []
+
+        with torch.no_grad():
+            for inputs, labels in dataloaders[phase]:
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
+                
+                outputs = model(inputs)
+                _, preds = torch.max(outputs, 1)
+
+                predictions.extend(preds.view(-1).cpu().numpy())
+                true_labels.extend(labels.view(-1).cpu().numpy())
+
+        # Calculate metrics
+        conf_matrix = confusion_matrix(true_labels, predictions)
+        accuracy = accuracy_score(true_labels, predictions)
+        precision = precision_score(true_labels, predictions, zero_division=0)
+        recall = recall_score(true_labels, predictions, zero_division=0)
+        f1 = f1_score(true_labels, predictions, zero_division=0)
+
+        print("Evaluation Metrics:")
+        print("Confusion Matrix:\n", conf_matrix)
+        print("Accuracy: {:.4f}".format(accuracy))
+        print("Precision: {:.4f}".format(precision))
+        print("Recall: {:.4f}".format(recall))
+        print("F1 Score: {:.4f}".format(f1))
+
+        return conf_matrix, accuracy, precision, recall, f1
 
 if __name__ == "__main__":
     main_dir = "/media/ist/Drive2/MANSOOR/Neuroimaging-Project/Breast_Cancer_Classification_Project"
     trainer = BinClassifierTrainer(main_dir=main_dir, num_epochs=20, batch_size=4)
-    trainer.setup_directories()  # Only run this once to setup directories and distribute files
+    
+    # trainer.setup_directories()  # Only run this once to setup directories and distribute files
     model = trainer.run()
+
+    # model_path = "Model_Weights/ResNet18_best_model_epoch_19.pth"  # Update this path
+    # trainer.load_and_evaluate_model(model_path)
