@@ -12,15 +12,15 @@ import copy
 import pandas as pd
 import shutil
 from breast_cancer_detection.parse_config import ConfigParser  
-import json
+import json, sys
 
 
 main_dir = "/media/ist/Drive2/MANSOOR/Neuroimaging-Project/Breast_Cancer_Classification_Project"
 pretrained_model_dir = f"{main_dir}/WSI_Breast_Cancer_Classification/breast_cancer_detection"
 
 target_dir = f"{main_dir}/Tiles_Data_Cat_Classification" # directory where to save the train/text folders
-source_dir = f"{main_dir}/test_tiles/n_14_test" # original directory the data is located 
-labels_file = "Labels/test_Predicted_labels_benign_malignant.csv"
+source_dir = f"{main_dir}/Tiles_Data" #test_tiles/n_14_test" # original directory the data is located 
+labels_file = "Labels/Predicted_labels_benign_malignant.csv"
 
 model_path_dir = f'{pretrained_model_dir}/saved/'
 model_config = f"{model_path_dir}/config.json"
@@ -29,49 +29,62 @@ pretrained_model_path = f"{model_path_dir}/model_best.pth"
 fine_tuned_model_dir = "Model_Weights"
 model_name = "DenseNet"
 
+# Ensure the directory containing custom modules is in the path
+sys.path.append(f'{main_dir}/WSI_Breast_Cancer_Classification/breast_cancer_detection')
+
+
 with open(model_config) as config_file:
     config_dict = json.load(config_file)
 
 config = ConfigParser(config=config_dict)  
 
 def setup_directories():
-    if not os.path.dirname(f"{target_dir}/train"):
-        os.makedirs(target_dir, exist_ok=True)
-        train_dir = os.path.join(target_dir, 'train')
-        val_dir = os.path.join(target_dir, 'val')
-        for subdir in [train_dir, val_dir]:
-            os.makedirs(os.path.join(subdir, 'ben'), exist_ok=True)
-            os.makedirs(os.path.join(subdir, 'mal'), exist_ok=True)
-        
-        labels = pd.read_csv(labels_file)
-        ben_files = [f"{labels.loc[i,"Filename"]}.png" for i in range(len(labels)) if labels.loc[i,"Label"] == 0] # 0 represents benign
-        mal_files = [f"{labels.loc[i,"Filename"]}.png" for i in range(len(labels)) if labels.loc[i,"Label"] == 1] # 1 represents malignant
+    # if not os.path.dirname(f"{target_dir}/train"):
+    os.makedirs(target_dir, exist_ok=True)
+    train_dir = os.path.join(target_dir, 'train')
+    val_dir = os.path.join(target_dir, 'val')
+    for subdir in [train_dir, val_dir]:
+        os.makedirs(os.path.join(subdir, 'ben'), exist_ok=True)
+        os.makedirs(os.path.join(subdir, 'mal'), exist_ok=True)
+    
+    labels = pd.read_csv(labels_file)
+    ben_files = [f"{labels.loc[i,"Filename"]}.png" for i in range(len(labels)) if labels.loc[i,"Label"] == 0] # 0 represents benign
+    mal_files = [f"{labels.loc[i,"Filename"]}.png" for i in range(len(labels)) if labels.loc[i,"Label"] == 1] # 1 represents malignant
 
-        split_and_move_files(ben_files, train_dir = os.path.join(train_dir, 'ben'), val_dir= os.path.join(val_dir, 'ben'))
-        split_and_move_files(mal_files, train_dir = os.path.join(train_dir, 'mal'), val_dir= os.path.join(val_dir, 'mal'))
+    split_and_move_files(ben_files, train_dir = os.path.join(train_dir, 'ben'), val_dir= os.path.join(val_dir, 'ben'))
+    split_and_move_files(mal_files, train_dir = os.path.join(train_dir, 'mal'), val_dir= os.path.join(val_dir, 'mal'))
 
 def split_and_move_files(files, train_dir, val_dir):
     train_files, val_files = train_test_split(files, test_size=0.2, random_state=42)
     for f in train_files:
-        shutil.move(os.path.join(source_dir, f), train_dir)
+        if os.path.isfile(os.path.join(source_dir, f)):
+            shutil.copy(os.path.join(source_dir, f), train_dir)
     for f in val_files:
-        shutil.move(os.path.join(source_dir, f), val_dir)
+        if os.path.isfile(os.path.join(source_dir, f)):
+            shutil.copy(os.path.join(source_dir, f), val_dir)
 
 def load_pretrained_model(model_path, num_classes=2):
-    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
-    
-    # Load your custom model
-    myModel = model.densenet121()  # Replace this with the actual function if different
-    
-    # Assuming the classifier might need to be adjusted
-    num_ftrs = myModel.classifier.in_features
-    myModel.classifier = torch.nn.Linear(num_ftrs, num_classes)
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"The specified model path does not exist: {model_path}")
+    if not os.path.isfile(model_path):
+        raise ValueError(f"The specified model path is not a file: {model_path}")
 
-    # Load state dictionary
-    myModel.load_state_dict(checkpoint['state_dict'])
+    try:
+        checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
 
-    myModel.eval()  # Set the model to evaluation mode
-    return myModel
+        myModel = model.densenet121()  # Replace this with the actual function if different
+        
+        num_ftrs = myModel.classifier.in_features
+        myModel.classifier = torch.nn.Linear(num_ftrs, num_classes)
+
+        # Load state dictionary
+        myModel.load_state_dict(checkpoint['state_dict'])
+
+        myModel.eval()  # Set the model to evaluation mode
+        return myModel
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to load the model due to: {str(e)}")
 
 
 def train_model(myModel, model_name, train_loader, val_loader, criterion, optimizer, num_epochs=25, device='cpu'):
@@ -157,15 +170,15 @@ batch_size = 4  # Adjust based on your system capability
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-myModel = load_pretrained_model(model_path=pretrained_model_path, num_classes=2)
-myModel = model.to('cuda' if torch.cuda.is_available() else 'cpu')
+myModel = load_pretrained_model(model_path = pretrained_model_path)
 
 criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(myModel.fc.parameters(), lr=0.001)  # Only optimize the final layer
+optimizer = optim.Adam(myModel.classifier.parameters(), lr=0.001)  # Only optimize the final layer
 
 # Setup the device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 myModel = myModel.to(device)
 
 # Call the training function
-myModel = train_model(myModel, model_name, train_loader, val_loader, criterion, optimizer, num_epochs=10, device=device)
+myModel = train_model(myModel, model_name, train_loader, val_loader,
+                       criterion, optimizer, num_epochs=10, device=device)
